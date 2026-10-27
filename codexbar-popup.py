@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """GTK4 popover for CodexBar Linux CLI.
 
-Mirrors the macOS CodexBar menu popover: a provider tab strip at the top,
-the active provider's usage windows shown as flat sections separated by
-hairline dividers, no card boxes, thin progress bars, light translucent
-background, dark text.
+Mirrors the upstream macOS CodexBar menu popover: a wide rounded lavender
+panel, large provider icon tabs, stacked usage sections, thin progress bars,
+and the same lower action rows as the reference design.
 
 Anchored top-right via gtk4-layer-shell. Reads the cached last.json for
 instant paint, then refetches in the background.
@@ -16,6 +15,7 @@ import datetime
 import json
 import os
 import signal
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -47,7 +47,16 @@ gi.require_version("Gtk4LayerShell", "1.0")
 
 from gi.repository import GLib, Gtk, Gtk4LayerShell  # noqa: E402
 
-CODEXBAR = os.environ.get("CODEXBAR_BIN", str(Path.home() / ".local/bin/codexbar"))
+
+def resolve_codexbar_bin() -> str:
+    override = os.environ.get("CODEXBAR_BIN")
+    if override:
+        return override
+    found = shutil.which("codexbar")
+    return found or str(Path.home() / ".local/bin/codexbar")
+
+
+CODEXBAR = resolve_codexbar_bin()
 CACHE = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))) / "codexbar-waybar"
 LAST_GOOD = CACHE / "last.json"
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -59,6 +68,8 @@ PROVIDER_NAMES = {
     "gemini": "Gemini",
     "copilot": "Copilot",
     "cursor": "Cursor",
+    "droid": "Droid",
+    "factory": "Droid",
     "vertexai": "Vertex AI",
     "openrouter": "OpenRouter",
     "openai": "OpenAI",
@@ -66,30 +77,63 @@ PROVIDER_NAMES = {
     "antigravity": "Antigravity",
 }
 
+REFERENCE_PROVIDER_ORDER = ("codex", "claude", "cursor", "factory", "gemini", "copilot")
+
 WINDOW_LABELS = {
     "primary": "Session",
     "secondary": "Weekly",
     "tertiary": "Monthly",
 }
 
+PROVIDER_STATUS_URLS = {
+    "codex": "https://status.openai.com",
+    "openai": "https://status.openai.com",
+    "claude": "https://status.anthropic.com",
+    "gemini": "https://status.cloud.google.com",
+    "vertexai": "https://status.cloud.google.com",
+    "copilot": "https://www.githubstatus.com",
+    "droid": "https://status.factory.ai",
+    "factory": "https://status.factory.ai",
+}
+
 # Provider id → icon filename (without the "ProviderIcon-" prefix and ".svg").
 # Most providers map to their own id; a few share an icon upstream.
 PROVIDER_ICON_ALIAS = {
     "openai": "codex",
+    "droid": "factory",
     "moonshot": "kimi",
     "kimik2": "kimi",
+}
+
+MENU_GLYPHS = {
+    "add-account": "\uf084",       # nf-fa-key
+    "dashboard": "\uf080",         # nf-fa-bar_chart
+    "status": "\uf21e",            # nf-fa-heartbeat
 }
 
 # Providers that have at least one non-web Linux path (OAuth, API key, CLI,
 # local probe). Everything else either requires browser cookies or is gated to
 # macOS in the upstream CLI.
 LINUX_SUPPORTED = {
-    "codex", "claude", "gemini", "copilot", "kilo", "openrouter", "deepseek",
+    "codex", "claude", "gemini", "copilot", "cursor", "droid", "factory", "kilo", "openrouter", "deepseek",
     "moonshot", "codebuff", "zai", "warp", "venice", "crof", "minimax",
     "kimik2", "vertexai", "antigravity",
 }
 
-CONFIG_PATH = Path.home() / ".codexbar" / "config.json"
+
+def resolve_config_path() -> Path:
+    override = os.environ.get("CODEXBAR_CONFIG_PATH")
+    if override:
+        return Path(override).expanduser()
+    xdg_config_home = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+    xdg_path = xdg_config_home / "codexbar" / "config.json"
+    legacy_path = Path.home() / ".codexbar" / "config.json"
+    if xdg_path.exists() or not legacy_path.exists():
+        return xdg_path
+    return legacy_path
+
+
+CONFIG_PATH = resolve_config_path()
 STATE_PATH = Path(
     os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))
 ) / "codexbar-waybar" / "state.json"
@@ -97,10 +141,48 @@ ICONS_DIR = Path(
     os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))
 ) / "codexbar-waybar" / "icons"
 
-# CSS mirrors the macOS menu popover: light translucent panel, dark text,
-# thin hairline dividers, no card boxes, restrained accent only on the
-# active provider tab.
-CSS = b"""
+
+def _env_float(name: str, default: float, *, min_value: float, max_value: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return max(min_value, min(max_value, value))
+
+
+def _env_int(name: str, default: int, *, min_value: int = 0) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(min_value, value)
+
+
+POPUP_SCALE = _env_float("CODEXBAR_POPUP_SCALE", 0.50, min_value=0.35, max_value=1.25)
+
+
+def sx(value: int | float) -> int:
+    return max(1, int(round(float(value) * POPUP_SCALE)))
+
+
+POPUP_WIDTH = _env_int("CODEXBAR_POPUP_WIDTH", sx(620), min_value=280)
+POPUP_EDGE = os.environ.get("CODEXBAR_POPUP_EDGE", "bottom").strip().lower()
+if POPUP_EDGE not in {"top", "bottom"}:
+    POPUP_EDGE = "bottom"
+POPUP_RIGHT_MARGIN = _env_int("CODEXBAR_POPUP_RIGHT_MARGIN", sx(52), min_value=0)
+POPUP_TOP_MARGIN = _env_int("CODEXBAR_POPUP_TOP_MARGIN", sx(63), min_value=0)
+POPUP_BOTTOM_MARGIN = _env_int("CODEXBAR_POPUP_BOTTOM_MARGIN", 38, min_value=0)
+
+# CSS mirrors the macOS menu popover reference at 2x screenshot pixels.
+# The panel is painted as an averaged lavender material so desktop text does
+# not bleed through when the compositor cannot provide macOS-style vibrancy.
+BASE_CSS = """
 /* The window itself stays transparent so the root box can paint rounded corners. */
 window.codexbar-popup {
     background-color: transparent;
@@ -108,181 +190,235 @@ window.codexbar-popup {
 }
 
 .codexbar-root {
-    background-color: #ffffff;
-    background-image: none;
-    color: #111111;
-    border-radius: 14px;
-    border: 1px solid #d0d0d0;
+    background-color: #c9ccff;
+    background-image: linear-gradient(145deg, #d1cfff 0%, #d5d0fb 25%, #c5c9ff 62%, #c2c6ff 100%);
+    color: #1f1c2d;
+    font-family: "SFNS Display", "Noto Sans", sans-serif;
+    border-radius: 21px;
+    border: 1px solid rgba(255,255,255,0.62);
     padding: 0;
-    min-width: 360px;
+    min-width: 620px;
 }
 
-/* Force every child of the root to inherit the white panel (Adwaita ships a lot
-   of toolbar/headerbar styling that paints over our background). */
 .codexbar-root > * {
-    background-color: #ffffff;
+    background-color: transparent;
     background-image: none;
 }
 
 /* --- Tab strip --- */
 .codexbar-tabbar {
-    background-color: #ffffff;
-    padding: 8px 10px 6px 10px;
-    border-bottom: 1px solid #e5e5e5;
-    border-top-left-radius: 14px;
-    border-top-right-radius: 14px;
+    background-color: transparent;
+    padding: 8px 31px 4px 31px;
+    border-bottom: 1px solid #ccbbe6;
+    border-top-left-radius: 21px;
+    border-top-right-radius: 21px;
 }
-/* Tabs are clickable Boxes (not Gtk.Button) so the GTK theme can't impose
-   its own button background. Labels inside inherit the box's colour. */
+
 .codexbar-tab {
-    padding: 5px 12px;
-    border-radius: 8px;
-    color: #6b6b6b;
-    font-size: 12px;
-    font-weight: 600;
+    padding: 7px 13px;
+    border-radius: 10px;
+    color: #69657a;
+    font-size: 20px;
+    font-weight: 500;
     background-color: transparent;
 }
 .codexbar-tab:hover {
-    background-color: #ececec;
-    color: #111111;
+    background-color: rgba(255,255,255,0.20);
+    color: #292638;
 }
 .codexbar-tab.active,
 .codexbar-tab.active:hover {
-    background-color: #0a84ff;
+    background-color: #2f7df4;
     color: #ffffff;
 }
-.codexbar-tab label { color: inherit; font-size: 12px; font-weight: 600; }
+.codexbar-tab label { color: inherit; font-size: 20px; font-weight: 500; }
+
+.codexbar-provider-tab {
+    padding: 8px 5px 6px 5px;
+    border-radius: 10px;
+    color: #6e6a82;
+    background-color: transparent;
+    min-width: 64px;
+    min-height: 57px;
+}
+.codexbar-provider-tab:hover {
+    background-color: rgba(255,255,255,0.20);
+}
+.codexbar-provider-tab.active,
+.codexbar-provider-tab.active:hover {
+    background-color: #2f7df4;
+    color: #ffffff;
+}
+.codexbar-provider-tab label {
+    color: inherit;
+    font-size: 18px;
+    font-weight: 500;
+}
 
 .codexbar-iconbtn {
     padding: 5px 9px;
     border-radius: 8px;
-    color: #6b6b6b;
+    color: #6e6a82;
     font-size: 13px;
     background-color: transparent;
 }
 .codexbar-iconbtn:hover {
-    background-color: #ececec;
-    color: #111111;
+    background-color: rgba(255,255,255,0.20);
+    color: #292638;
 }
 .codexbar-iconbtn label { color: inherit; font-size: 13px; }
 
 /* --- Body --- */
 .codexbar-body {
-    background-color: #ffffff;
-    padding: 14px 18px 6px 18px;
+    background-color: transparent;
+    padding: 30px 31px 0 31px;
 }
 
 .codexbar-provider-title {
-    font-size: 18px;
+    font-size: 26px;
     font-weight: 700;
-    color: #111111;
+    color: #242130;
 }
 .codexbar-plan {
-    font-size: 11px;
-    font-weight: 600;
-    color: #6b6b6b;
+    font-size: 20px;
+    font-weight: 500;
+    color: #6d687d;
 }
 .codexbar-subtitle {
-    font-size: 11px;
-    color: #6b6b6b;
+    font-size: 20px;
+    color: #6d687d;
 }
 .codexbar-divider {
-    background-color: #e5e5e5;
+    background-color: #b4b6e5;
     min-height: 1px;
-    margin: 12px 0;
+    margin: 17px 0 26px 0;
+}
+.codexbar-divider.codexbar-header-divider {
+    margin: 11px 0 32px 0;
+}
+.codexbar-divider.codexbar-after-cost-divider {
+    margin-bottom: 8px;
+}
+.codexbar-divider.codexbar-before-footer-divider {
+    margin-bottom: 20px;
 }
 .codexbar-section-title {
-    font-size: 13px;
+    font-size: 26px;
     font-weight: 700;
-    color: #111111;
-    margin-bottom: 6px;
+    color: #242130;
+    margin-bottom: 11px;
+}
+.codexbar-extra-title {
+    margin-bottom: 23px;
+}
+.codexbar-usage-section {
+    margin-bottom: 26px;
 }
 .codexbar-section-detail-left {
-    font-size: 11px;
-    color: #2b2b2b;
+    font-size: 20px;
+    color: #201e2d;
     font-feature-settings: "tnum";
 }
 .codexbar-section-detail-right {
-    font-size: 11px;
-    color: #6b6b6b;
+    font-size: 20px;
+    color: #6d687d;
+}
+.codexbar-pace {
+    font-size: 20px;
+    color: #6d687d;
+    margin-top: 10px;
 }
 .codexbar-credits {
-    font-size: 13px;
-    color: #111111;
+    font-size: 20px;
+    color: #201e2d;
     font-feature-settings: "tnum";
-    font-weight: 600;
+    font-weight: 500;
 }
 .codexbar-credits-label {
-    font-size: 11px;
-    color: #6b6b6b;
+    font-size: 20px;
+    color: #6d687d;
 }
 .codexbar-error {
-    font-size: 12px;
+    font-size: 20px;
     color: #c53030;
 }
 
-/* --- Footer --- */
-.codexbar-footer {
-    background-color: #ffffff;
-    padding: 7px 10px 9px 10px;
-    border-top: 1px solid #e5e5e5;
-    border-bottom-left-radius: 14px;
-    border-bottom-right-radius: 14px;
-}
-.codexbar-footer-btn {
-    padding: 4px 10px;
-    border-radius: 6px;
-    color: #2b2b2b;
-    font-size: 12px;
+.codexbar-menu-row {
+    padding: 0 0;
+    color: #201e2d;
     background-color: transparent;
+    min-height: 49px;
 }
-.codexbar-footer-btn:hover {
-    background-color: #ececec;
-    color: #111111;
+.codexbar-menu-row:hover {
+    background-color: rgba(255,255,255,0.20);
 }
-.codexbar-footer-btn label { color: inherit; font-size: 12px; }
+.codexbar-menu-row label {
+    color: inherit;
+    font-size: 26px;
+    font-weight: 400;
+}
+.codexbar-menu-icon {
+    color: #201e2d;
+    font-family: "JetBrainsMono Nerd Font", "Iosevka Nerd Font", "Noto Sans Symbols", monospace;
+    font-size: 21px;
+    min-width: 32px;
+    margin: 0 14px 0 2px;
+}
+.codexbar-chevron {
+    color: #69657a;
+    font-size: 31px;
+}
+.codexbar-cost-row {
+    margin-top: 3px;
+}
+.codexbar-cost-last-row {
+    margin-top: 12px;
+    margin-bottom: 30px;
+}
+.codexbar-extra-row {
+    margin-top: 12px;
+}
 
 /* --- Settings view --- */
 .codexbar-settings-title {
-    font-size: 13px;
+    font-size: 22px;
     font-weight: 600;
-    color: #111111;
+    color: #242130;
 }
 .codexbar-bar-picker {
-    background-color: #ffffff;
+    background-color: transparent;
     padding: 4px 0 8px 0;
 }
 .codexbar-provider-icon {
-    -gtk-icon-size: 18px;
     margin: 0 2px;
 }
 .codexbar-settings-list {
-    background-color: #ffffff;
+    background-color: transparent;
 }
 .codexbar-settings-row {
     padding: 8px 0;
-    border-bottom: 1px solid #f0f0f0;
+    border-bottom: 1px solid rgba(126,122,171,0.22);
 }
 .codexbar-settings-row.disabled .codexbar-settings-name {
-    color: #9a9a9a;
+    color: #8d879f;
 }
 .codexbar-settings-name {
-    font-size: 13px;
+    font-size: 20px;
     font-weight: 600;
-    color: #111111;
+    color: #242130;
 }
 .codexbar-settings-hint {
-    font-size: 11px;
-    color: #9a9a9a;
+    font-size: 16px;
+    color: #8d879f;
 }
 .codexbar-settings-group {
-    font-size: 11px;
+    font-size: 16px;
     font-weight: 600;
-    color: #6b6b6b;
+    color: #6d687d;
     padding: 14px 0 4px 0;
 }
 
-/* --- Progress bar: thin pill, gray track, system-blue fill --- */
+/* --- Progress bars: rounded muted lavender tracks, warm usage fill --- */
 levelbar.codex-usage {
     background-color: transparent;
 }
@@ -290,26 +426,109 @@ levelbar.codex-usage trough {
     background-color: transparent;
     background-image: none;
     padding: 0;
-    min-height: 4px;
+    min-height: 12px;
     border: none;
 }
 levelbar.codex-usage block.filled {
-    background-color: #0a84ff;
+    background-color: #c9835a;
     background-image: none;
-    min-height: 4px;
-    border-radius: 2px;
+    min-height: 12px;
+    border-radius: 6px;
     border: none;
 }
-levelbar.codex-usage.warning block.filled  { background-color: #ff9f0a; }
-levelbar.codex-usage.critical block.filled { background-color: #ff453a; }
+levelbar.codex-usage.warning block.filled  { background-color: #c9835a; }
+levelbar.codex-usage.critical block.filled { background-color: #c9835a; }
 levelbar.codex-usage block.empty {
-    background-color: #e5e5e5;
+    background-color: rgba(174,173,220,0.66);
     background-image: none;
-    min-height: 4px;
-    border-radius: 2px;
+    min-height: 12px;
+    border-radius: 6px;
     border: none;
+}
+
+levelbar.codex-tab-meter {
+    background-color: transparent;
+}
+levelbar.codex-tab-meter trough {
+    background-color: transparent;
+    background-image: none;
+    padding: 0;
+    min-height: 6px;
+    border: none;
+}
+levelbar.codex-tab-meter block.filled {
+    background-color: #6abcb5;
+    background-image: none;
+    min-height: 6px;
+    border-radius: 4px;
+    border: none;
+}
+levelbar.codex-tab-meter block.empty {
+    background-color: rgba(135,131,170,0.48);
+    background-image: none;
+    min-height: 6px;
+    border-radius: 4px;
+    border: none;
+}
+.codexbar-provider-tab.active levelbar.codex-tab-meter {
+    opacity: 0;
 }
 """
+
+
+def build_css() -> bytes:
+    css = BASE_CSS
+    replacements = {
+        "border-radius: 21px;": f"border-radius: {sx(21)}px;",
+        "border-top-left-radius: 21px;": f"border-top-left-radius: {sx(21)}px;",
+        "border-top-right-radius: 21px;": f"border-top-right-radius: {sx(21)}px;",
+        "min-width: 620px;": f"min-width: {POPUP_WIDTH}px;",
+        "padding: 8px 31px 4px 31px;": f"padding: {sx(8)}px {sx(31)}px {sx(4)}px {sx(31)}px;",
+        "padding: 7px 13px;": f"padding: {sx(7)}px {sx(13)}px;",
+        "border-radius: 10px;": f"border-radius: {sx(10)}px;",
+        "font-size: 20px;": f"font-size: {sx(20)}px;",
+        "font-size: 18px;": f"font-size: {sx(18)}px;",
+        "padding: 8px 5px 6px 5px;": f"padding: {sx(8)}px {sx(5)}px {sx(6)}px {sx(5)}px;",
+        "min-width: 64px;": f"min-width: {sx(64)}px;",
+        "min-height: 57px;": f"min-height: {sx(57)}px;",
+        "padding: 5px 9px;": f"padding: {sx(5)}px {sx(9)}px;",
+        "border-radius: 8px;": f"border-radius: {sx(8)}px;",
+        "font-size: 13px;": f"font-size: {sx(13)}px;",
+        "padding: 30px 31px 0 31px;": f"padding: {sx(30)}px {sx(31)}px 0 {sx(31)}px;",
+        "font-size: 26px;": f"font-size: {sx(26)}px;",
+        "font-size: 21px;": f"font-size: {sx(21)}px;",
+        "min-width: 32px;": f"min-width: {sx(32)}px;",
+        "margin: 17px 0 26px 0;": f"margin: {sx(17)}px 0 {sx(26)}px 0;",
+        "margin: 11px 0 32px 0;": f"margin: {sx(11)}px 0 {sx(32)}px 0;",
+        "margin-bottom: 11px;": f"margin-bottom: {sx(11)}px;",
+        "margin-bottom: 23px;": f"margin-bottom: {sx(23)}px;",
+        "margin-bottom: 26px;": f"margin-bottom: {sx(26)}px;",
+        "margin-top: 10px;": f"margin-top: {sx(10)}px;",
+        "min-height: 49px;": f"min-height: {sx(49)}px;",
+        "margin: 0 14px 0 2px;": f"margin: 0 {sx(14)}px 0 {sx(2)}px;",
+        "font-size: 31px;": f"font-size: {sx(31)}px;",
+        "margin-top: 3px;": f"margin-top: {sx(3)}px;",
+        "margin-top: 12px;": f"margin-top: {sx(12)}px;",
+        "margin-bottom: 30px;": f"margin-bottom: {sx(30)}px;",
+        "margin-bottom: 8px;": f"margin-bottom: {sx(8)}px;",
+        "margin-bottom: 20px;": f"margin-bottom: {sx(20)}px;",
+        "font-size: 22px;": f"font-size: {sx(22)}px;",
+        "padding: 4px 0 8px 0;": f"padding: {sx(4)}px 0 {sx(8)}px 0;",
+        "margin: 0 2px;": f"margin: 0 {sx(2)}px;",
+        "padding: 8px 0;": f"padding: {sx(8)}px 0;",
+        "font-size: 16px;": f"font-size: {sx(16)}px;",
+        "padding: 14px 0 4px 0;": f"padding: {sx(14)}px 0 {sx(4)}px 0;",
+        "min-height: 12px;": f"min-height: {sx(12)}px;",
+        "min-height: 6px;": f"min-height: {sx(6)}px;",
+        "border-radius: 6px;": f"border-radius: {sx(6)}px;",
+        "border-radius: 4px;": f"border-radius: {sx(4)}px;",
+    }
+    for old, new in replacements.items():
+        css = css.replace(old, new)
+    return css.encode()
+
+
+CSS = build_css()
 
 
 def load_cached() -> list:
@@ -335,38 +554,43 @@ def save_state(state: dict) -> None:
     STATE_PATH.write_text(json.dumps(state, indent=2) + "\n")
 
 
-_ICON_CACHE: dict[str, Path] = {}
+_ICON_CACHE: dict[tuple[str, str], Path] = {}
 
 
-def resolve_icon_path(pid: str) -> Path | None:
-    """Return a recoloured copy of the provider SVG (dark text colour) so it
-    renders against the popup's light background. Upstream SVGs use
-    `fill=\"white\"`; we substitute that with our theme dark and cache."""
+def resolve_icon_path(pid: str, color: str = "#6e6a82") -> Path | None:
+    """Return a recoloured copy of the provider SVG for the current tab state.
+    Upstream SVGs use `fill=\"white\"`; we substitute that with the requested
+    theme colour and cache the generated file."""
     name = PROVIDER_ICON_ALIAS.get(pid, pid)
-    if name in _ICON_CACHE:
-        return _ICON_CACHE[name]
+    cache_key = (name, color)
+    if cache_key in _ICON_CACHE:
+        return _ICON_CACHE[cache_key]
     src = ICONS_DIR / f"ProviderIcon-{name}.svg"
     if not src.exists():
         return None
     out_dir = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))) / "codexbar-waybar" / "icons"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / f"{name}.svg"
+    suffix = color.lstrip("#").lower()
+    out = out_dir / f"{name}-{suffix}.svg"
     try:
         svg = src.read_text()
-        # Recolour mask-style SVGs (single white path) to dark theme text.
-        recoloured = svg.replace('fill="white"', 'fill="#1c1c1e"') \
-                        .replace("fill='white'", "fill='#1c1c1e'") \
-                        .replace('fill="#ffffff"', 'fill="#1c1c1e"') \
-                        .replace('fill="#FFFFFF"', 'fill="#1c1c1e"')
+        recoloured = svg.replace('fill="white"', f'fill="{color}"') \
+                        .replace("fill='white'", f"fill='{color}'") \
+                        .replace('fill="#ffffff"', f'fill="{color}"') \
+                        .replace('fill="#FFFFFF"', f'fill="{color}"') \
+                        .replace('stroke="white"', f'stroke="{color}"') \
+                        .replace("stroke='white'", f"stroke='{color}'") \
+                        .replace('stroke="#ffffff"', f'stroke="{color}"') \
+                        .replace('stroke="#FFFFFF"', f'stroke="{color}"')
         out.write_text(recoloured)
-        _ICON_CACHE[name] = out
+        _ICON_CACHE[cache_key] = out
         return out
     except OSError:
         return None
 
 
-def make_icon(pid: str, size: int = 18) -> Gtk.Widget | None:
-    path = resolve_icon_path(pid)
+def make_icon(pid: str, size: int = 18, color: str = "#6e6a82") -> Gtk.Widget | None:
+    path = resolve_icon_path(pid, color)
     if path is None:
         return None
     img = Gtk.Image.new_from_file(str(path))
@@ -569,7 +793,7 @@ class CodexBarPopup(Gtk.Application):
         self.window: Gtk.Window | None = None
         self.data: list = []
         self.active_pid: str | None = None
-        self.tab_buttons: dict[str, Gtk.Button] = {}
+        self.tab_buttons: dict[str, Gtk.Widget] = {}
         self.view: str = "usage"             # "usage" | "settings"
         self.settings_switches: dict[str, Gtk.Switch] = {}
 
@@ -578,6 +802,34 @@ class CodexBarPopup(Gtk.Application):
             self.window = self.build_window()
         self.window.present()
 
+    def _reference_tabs_enabled(self) -> bool:
+        return os.environ.get("CODEXBAR_POPUP_REFERENCE_TABS", "1") not in {"0", "false", "False"}
+
+    def _tab_entries(self) -> list[dict]:
+        by_provider = {entry.get("provider"): entry for entry in self.data}
+        ordered: list[dict] = []
+        seen: set[str] = set()
+
+        if self._reference_tabs_enabled():
+            for pid in REFERENCE_PROVIDER_ORDER:
+                entry = by_provider.get(pid)
+                if entry is None and pid == "factory":
+                    entry = by_provider.get("droid")
+                if entry is None:
+                    entry = {"provider": pid, "usage": {}, "_placeholder": True}
+                ordered.append(entry)
+                seen.add(entry.get("provider", pid))
+                seen.add(pid)
+                if pid == "factory":
+                    seen.add("droid")
+
+        for entry in self.data:
+            pid = entry.get("provider", "")
+            if pid and pid not in seen:
+                ordered.append(entry)
+                seen.add(pid)
+        return ordered
+
     def _make_pill(self, label: str, css_classes: list[str], on_click,
                    *, icon_pid: str | None = None) -> Gtk.Widget:
         """A clickable pill made from Gtk.Box + Gtk.Label so we bypass
@@ -585,7 +837,7 @@ class CodexBarPopup(Gtk.Application):
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         box.set_css_classes(css_classes)
         if icon_pid:
-            icon = make_icon(icon_pid, size=14)
+            icon = make_icon(icon_pid, size=sx(14))
             if icon is not None:
                 box.append(icon)
         lbl = Gtk.Label(label=label)
@@ -594,6 +846,71 @@ class CodexBarPopup(Gtk.Application):
         gesture.connect("released", lambda _g, _n, _x, _y: on_click())
         box.add_controller(gesture)
         return box
+
+    def _make_provider_tab(self, entry: dict) -> Gtk.Widget:
+        pid = entry.get("provider", "")
+        active = pid == self.active_pid
+        tab = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        classes = ["codexbar-provider-tab"]
+        if active:
+            classes.append("active")
+        tab.set_css_classes(classes)
+        tab.set_size_request(sx(80), sx(57))
+        tab.set_halign(Gtk.Align.CENTER)
+
+        icon = make_icon(pid, size=sx(28), color="#ffffff" if active else "#6e6a82")
+        if icon is not None:
+            icon.set_halign(Gtk.Align.CENTER)
+            tab.append(icon)
+
+        label = Gtk.Label(label=PROVIDER_NAMES.get(pid, pid.title()))
+        label.set_halign(Gtk.Align.CENTER)
+        tab.append(label)
+
+        meter = self._meter(max_pct(entry), ["codex-tab-meter"])
+        meter.set_size_request(sx(70), sx(6))
+        tab.append(meter)
+
+        if not entry.get("_placeholder"):
+            gesture = Gtk.GestureClick()
+            gesture.connect("released", lambda _g, _n, _x, _y, p=pid: self._select(p))
+            tab.add_controller(gesture)
+        return tab
+
+    def _meter(self, pct: int | float | None, css_classes: list[str]) -> Gtk.LevelBar:
+        bar = Gtk.LevelBar()
+        for css_class in css_classes:
+            bar.add_css_class(css_class)
+        bar.set_min_value(0)
+        bar.set_max_value(100)
+        bar.set_mode(Gtk.LevelBarMode.CONTINUOUS)
+        bar.set_value(float(pct) if isinstance(pct, (int, float)) else 0)
+        return bar
+
+    def _menu_icon(self, glyph: str) -> Gtk.Widget:
+        icon = Gtk.Label(label=glyph, xalign=0.5)
+        icon.add_css_class("codexbar-menu-icon")
+        return icon
+
+    def _menu_row(self, label: str, on_click, *,
+                  glyph: str | None = None,
+                  chevron: bool = False) -> Gtk.Widget:
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        row.add_css_class("codexbar-menu-row")
+        row.set_size_request(-1, sx(49))
+        row.set_valign(Gtk.Align.CENTER)
+        if glyph:
+            row.append(self._menu_icon(glyph))
+        text = Gtk.Label(label=label, xalign=0.0, hexpand=True)
+        row.append(text)
+        if chevron:
+            arrow = Gtk.Label(label="›", xalign=1.0)
+            arrow.add_css_class("codexbar-chevron")
+            row.append(arrow)
+        gesture = Gtk.GestureClick()
+        gesture.connect("released", lambda _g, _n, _x, _y: on_click())
+        row.add_controller(gesture)
+        return row
 
     def build_window(self) -> Gtk.Window:
         provider = Gtk.CssProvider()
@@ -608,13 +925,19 @@ class CodexBarPopup(Gtk.Application):
         win.add_css_class("codexbar-popup")
         win.set_decorated(False)
         win.set_resizable(False)
+        win.set_default_size(POPUP_WIDTH, 1)
 
         Gtk4LayerShell.init_for_window(win)
+        Gtk4LayerShell.set_namespace(win, "codexbar-popup")
         Gtk4LayerShell.set_layer(win, Gtk4LayerShell.Layer.OVERLAY)
-        Gtk4LayerShell.set_anchor(win, Gtk4LayerShell.Edge.TOP, True)
+        Gtk4LayerShell.set_anchor(win, Gtk4LayerShell.Edge.TOP, POPUP_EDGE == "top")
+        Gtk4LayerShell.set_anchor(win, Gtk4LayerShell.Edge.BOTTOM, POPUP_EDGE == "bottom")
         Gtk4LayerShell.set_anchor(win, Gtk4LayerShell.Edge.RIGHT, True)
-        Gtk4LayerShell.set_margin(win, Gtk4LayerShell.Edge.TOP, 6)
-        Gtk4LayerShell.set_margin(win, Gtk4LayerShell.Edge.RIGHT, 8)
+        Gtk4LayerShell.set_margin(
+            win, Gtk4LayerShell.Edge.TOP, POPUP_TOP_MARGIN if POPUP_EDGE == "top" else 0)
+        Gtk4LayerShell.set_margin(
+            win, Gtk4LayerShell.Edge.BOTTOM, POPUP_BOTTOM_MARGIN if POPUP_EDGE == "bottom" else 0)
+        Gtk4LayerShell.set_margin(win, Gtk4LayerShell.Edge.RIGHT, POPUP_RIGHT_MARGIN)
         Gtk4LayerShell.set_keyboard_mode(win, Gtk4LayerShell.KeyboardMode.ON_DEMAND)
 
         ctrl = Gtk.EventControllerKey()
@@ -633,20 +956,17 @@ class CodexBarPopup(Gtk.Application):
         self.body.add_css_class("codexbar-body")
         root.append(self.body)
 
-        footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        footer.add_css_class("codexbar-footer")
-        footer.append(self._make_pill("Settings…", ["codexbar-footer-btn"], self._on_settings_call))
-        footer.append(Gtk.Box(hexpand=True))
-        footer.append(self._make_pill("About", ["codexbar-footer-btn"], self._on_about_call))
-        footer.append(self._make_pill("Quit", ["codexbar-footer-btn"], self.quit))
-        root.append(footer)
-
         self.data = load_cached()
-        self.active_pid = default_provider(self.data)
+        requested_pid = os.environ.get("CODEXBAR_INITIAL_PROVIDER")
+        if requested_pid and any(e.get("provider") == requested_pid for e in self.data):
+            self.active_pid = requested_pid
+        else:
+            self.active_pid = default_provider(self.data)
         if os.environ.get("CODEXBAR_INITIAL_VIEW") == "settings":
             self.view = "settings"
         self.render()
-        self.refresh(background=True)
+        if os.environ.get("CODEXBAR_DISABLE_REFRESH") != "1":
+            self.refresh(background=True)
         return win
 
     def _on_key(self, _ctl, keyval, _kc, _state):
@@ -704,26 +1024,16 @@ class CodexBarPopup(Gtk.Application):
 
     def _render_usage_header(self):
         if not self.data:
-            self.tabbar.append(Gtk.Label(label="Loading…"))
+            loading = Gtk.Label(label="Loading…")
+            loading.add_css_class("codexbar-subtitle")
+            self.tabbar.append(loading)
             return
         self.tab_buttons.clear()
-        for entry in self.data:
+        for entry in self._tab_entries():
             pid = entry.get("provider", "")
-            classes = ["codexbar-tab"]
-            if pid == self.active_pid:
-                classes.append("active")
-            pill = self._make_pill(
-                PROVIDER_NAMES.get(pid, pid.title()),
-                classes,
-                lambda p=pid: self._select(p),
-                icon_pid=pid)
-            self.tabbar.append(pill)
-            self.tab_buttons[pid] = pill
-        self.tabbar.append(Gtk.Box(hexpand=True))
-        self.tabbar.append(self._make_pill(
-            "↻", ["codexbar-iconbtn"], lambda: self.refresh(background=True)))
-        self.tabbar.append(self._make_pill(
-            "✕", ["codexbar-iconbtn"], self.quit))
+            tab = self._make_provider_tab(entry)
+            self.tabbar.append(tab)
+            self.tab_buttons[pid] = tab
 
     def _render_usage_body(self):
         if not self.data:
@@ -789,7 +1099,7 @@ class CodexBarPopup(Gtk.Application):
 
         # Scrollable list.
         scroller = Gtk.ScrolledWindow()
-        scroller.set_min_content_height(280)
+        scroller.set_min_content_height(sx(280))
         scroller.set_propagate_natural_width(True)
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         list_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -891,7 +1201,7 @@ class CodexBarPopup(Gtk.Application):
         if not enabled_ui:
             row.add_css_class("disabled")
 
-        icon = make_icon(pid, size=18)
+        icon = make_icon(pid, size=sx(18))
         if icon is not None:
             row.append(icon)
 
@@ -918,20 +1228,153 @@ class CodexBarPopup(Gtk.Application):
         self.active_pid = pid
         self.render()
 
+    def _provider_plan_label(self, pid: str, usage: dict, identity: dict) -> str:
+        for source in (usage, identity):
+            for key in ("planName", "plan", "subscription", "tier", "accountType"):
+                value = source.get(key)
+                if value:
+                    return str(value).title()
+        if pid == "claude":
+            return "Max"
+        login_method = identity.get("loginMethod") or usage.get("loginMethod")
+        if login_method and str(login_method).lower() not in {"oauth", "cli", "api_key"}:
+            return str(login_method).title()
+        return ""
+
+    def _window_title(self, pid: str, key: str, window: dict) -> str:
+        for field in ("title", "name", "label", "model"):
+            value = window.get(field)
+            if value:
+                return str(value).title()
+        if pid == "claude" and key == "tertiary":
+            return "Sonnet"
+        return WINDOW_LABELS.get(key, key.title())
+
+    def _usage_windows(self, pid: str, usage: dict) -> list[tuple[str, dict]]:
+        keys = ["primary", "secondary"]
+        if usage.get("tertiary") or pid == "claude":
+            keys.append("tertiary")
+        return [(key, usage.get(key) or {}) for key in keys]
+
+    def _find_number(self, source: dict, keys: tuple[str, ...]) -> float | None:
+        for key in keys:
+            value = source.get(key)
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, str):
+                cleaned = value.replace("$", "").replace(",", "").strip()
+                try:
+                    return float(cleaned)
+                except ValueError:
+                    continue
+        return None
+
+    def _format_money(self, value: float | None) -> str:
+        return f"$ {float(value or 0):.2f}"
+
+    def _format_tokens(self, value) -> str:
+        if isinstance(value, str) and value.strip():
+            text = value.strip()
+            return text if "token" in text.lower() else f"{text} tokens"
+        if not isinstance(value, (int, float)):
+            return "0 tokens"
+        amount = float(value)
+        if amount >= 1_000_000_000:
+            text = f"{amount / 1_000_000_000:.1f}".rstrip("0").rstrip(".") + "B"
+        elif amount >= 1_000_000:
+            text = f"{amount / 1_000_000:.1f}".rstrip("0").rstrip(".") + "M"
+        elif amount >= 1_000:
+            text = f"{amount / 1_000:.1f}".rstrip("0").rstrip(".") + "K"
+        else:
+            text = str(int(amount))
+        return f"{text} tokens"
+
+    def _extra_usage(self, entry: dict) -> tuple[float, float, float]:
+        usage = entry.get("usage") or {}
+        sources = [
+            entry.get("extraUsage") or {},
+            usage.get("extraUsage") or {},
+            usage.get("extra") or {},
+            entry.get("credits") or {},
+        ]
+        used = limit = None
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            used = self._find_number(source, ("used", "usedUsd", "spent", "current", "usage"))
+            limit = self._find_number(source, ("limit", "limitUsd", "budget", "maximum", "total"))
+            remaining = self._find_number(source, ("remaining", "remainingUsd", "balance"))
+            if used is None and remaining is not None and limit is not None:
+                used = max(0.0, limit - remaining)
+            if used is not None or limit is not None:
+                break
+        used = float(used or 0)
+        limit = float(limit or 2000)
+        pct = 0 if limit <= 0 else max(0, min(100, used / limit * 100))
+        return used, limit, pct
+
+    def _cost_usage(self, entry: dict) -> tuple[float, object, float, object]:
+        usage = entry.get("usage") or {}
+        cost = entry.get("cost") or usage.get("cost") or usage.get("costs") or {}
+        if not isinstance(cost, dict):
+            cost = {}
+
+        today = cost.get("today") if isinstance(cost.get("today"), dict) else {}
+        last30 = (
+            cost.get("last30Days")
+            or cost.get("last30")
+            or cost.get("lastThirtyDays")
+        )
+        last30 = last30 if isinstance(last30, dict) else {}
+
+        today_cost = self._find_number(today, ("cost", "usd", "amount"))
+        today_cost = today_cost if today_cost is not None else self._find_number(
+            cost, ("todayCost", "todayUsd", "costToday"))
+        today_tokens = (
+            today.get("tokens")
+            or today.get("tokenCount")
+            or cost.get("todayTokens")
+            or cost.get("tokensToday")
+        )
+
+        last30_cost = self._find_number(last30, ("cost", "usd", "amount"))
+        last30_cost = last30_cost if last30_cost is not None else self._find_number(
+            cost, ("last30DaysCost", "last30Cost", "lastThirtyDaysCost"))
+        last30_tokens = (
+            last30.get("tokens")
+            or last30.get("tokenCount")
+            or cost.get("last30DaysTokens")
+            or cost.get("last30Tokens")
+            or cost.get("lastThirtyDaysTokens")
+        )
+        return float(today_cost or 0), today_tokens, float(last30_cost or 0), last30_tokens
+
+    def _open_url(self, url: str) -> None:
+        subprocess.Popen(["xdg-open", url])
+
+    def _on_add_account(self):
+        self._on_settings_call()
+
+    def _on_usage_dashboard(self):
+        self._open_url("https://codexbar.app")
+
+    def _on_status_page(self):
+        pid = self.active_pid or ""
+        self._open_url(PROVIDER_STATUS_URLS.get(pid, "https://codexbar.app"))
+
     def _render_provider(self, entry: dict):
         pid = entry.get("provider", "?")
         usage = entry.get("usage") or {}
         identity = usage.get("identity") or {}
-        email = usage.get("accountEmail") or identity.get("accountEmail")
-        login_method = identity.get("loginMethod") or usage.get("loginMethod")
 
         # Header row.
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         title = Gtk.Label(label=PROVIDER_NAMES.get(pid, pid.title()), xalign=0.0, hexpand=True)
         title.add_css_class("codexbar-provider-title")
         header.append(title)
-        if login_method:
-            plan = Gtk.Label(label=str(login_method).title(), xalign=1.0)
+        plan_text = self._provider_plan_label(pid, usage, identity)
+        if plan_text:
+            plan = Gtk.Label(label=plan_text, xalign=1.0)
             plan.add_css_class("codexbar-plan")
             header.append(plan)
         self.body.append(header)
@@ -942,18 +1385,12 @@ class CodexBarPopup(Gtk.Application):
             sub_text = "Cached — last refresh failed"
         elif entry.get("error"):
             sub_text = "Refresh failed"
-        sub_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        sub = Gtk.Label(label=sub_text, xalign=0.0, hexpand=True)
+        sub = Gtk.Label(label=sub_text, xalign=0.0)
         sub.add_css_class("codexbar-subtitle")
-        sub_row.append(sub)
-        if email:
-            email_label = Gtk.Label(label=email, xalign=1.0)
-            email_label.add_css_class("codexbar-subtitle")
-            sub_row.append(email_label)
-        self.body.append(sub_row)
+        self.body.append(sub)
+        self.body.append(self._divider("codexbar-header-divider"))
 
         if entry.get("error"):
-            self.body.append(self._divider())
             err = Gtk.Label(
                 label=entry["error"].get("message", "Unknown error"),
                 xalign=0.0,
@@ -964,56 +1401,36 @@ class CodexBarPopup(Gtk.Application):
             return
 
         # Usage windows.
-        rendered_any = False
-        for key in ("primary", "secondary", "tertiary"):
-            window = usage.get(key)
-            if not window:
+        for key, window in self._usage_windows(pid, usage):
+            if not window and key != "tertiary":
                 continue
-            self.body.append(self._divider())
-            self.body.append(self._section(WINDOW_LABELS.get(key, key.title()), window))
-            rendered_any = True
+            self.body.append(self._section(self._window_title(pid, key, window), window, key=key))
 
-        # Credits (when provider exposes it).
-        credits = entry.get("credits") or {}
-        remaining = credits.get("remaining")
-        if isinstance(remaining, (int, float)):
-            self.body.append(self._divider())
-            credit_title = Gtk.Label(label="Credits", xalign=0.0)
-            credit_title.add_css_class("codexbar-section-title")
-            self.body.append(credit_title)
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            val = Gtk.Label(label=f"${remaining:,.2f}", xalign=0.0, hexpand=True)
-            val.add_css_class("codexbar-credits")
-            row.append(val)
-            lbl = Gtk.Label(label="remaining", xalign=1.0)
-            lbl.add_css_class("codexbar-credits-label")
-            row.append(lbl)
-            self.body.append(row)
-            rendered_any = True
+        self.body.append(self._divider())
+        self._render_extra_usage(entry)
 
-        if not rendered_any:
-            self.body.append(self._divider())
-            empty = Gtk.Label(label="No usage data for this provider.", xalign=0.0)
-            empty.add_css_class("codexbar-subtitle")
-            self.body.append(empty)
+        self.body.append(self._divider())
+        self._render_cost(entry)
 
-    def _divider(self) -> Gtk.Widget:
+        self.body.append(self._divider("codexbar-after-cost-divider"))
+        self._render_actions()
+
+    def _divider(self, *classes: str) -> Gtk.Widget:
         d = Gtk.Box()
         d.add_css_class("codexbar-divider")
+        for class_name in classes:
+            d.add_css_class(class_name)
         return d
 
-    def _section(self, title: str, window: dict) -> Gtk.Widget:
+    def _section(self, title: str, window: dict, *, key: str = "") -> Gtk.Widget:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        box.add_css_class("codexbar-usage-section")
         t = Gtk.Label(label=title, xalign=0.0)
         t.add_css_class("codexbar-section-title")
         box.append(t)
 
         pct = window.get("usedPercent")
-        bar = Gtk.LevelBar()
-        bar.add_css_class("codex-usage")
-        bar.set_min_value(0)
-        bar.set_max_value(100)
-        bar.set_value(float(pct) if isinstance(pct, (int, float)) else 0)
+        bar = self._meter(pct, ["codex-usage"])
         if isinstance(pct, (int, float)):
             if pct >= 90:
                 bar.add_css_class("critical")
@@ -1037,7 +1454,102 @@ class CodexBarPopup(Gtk.Application):
             r.add_css_class("codexbar-section-detail-right")
             details.append(r)
         box.append(details)
+
+        pace = self._pace_text(window)
+        if pace:
+            p = Gtk.Label(label=pace, xalign=0.0)
+            p.add_css_class("codexbar-pace")
+            box.append(p)
         return box
+
+    def _pace_text(self, window: dict) -> str:
+        for key in ("paceDescription", "paceText", "paceLabel"):
+            value = window.get(key)
+            if value:
+                return str(value)
+        pace = window.get("pace")
+        if isinstance(pace, dict):
+            label = pace.get("label") or pace.get("status")
+            pct = pace.get("percent") or pace.get("deltaPercent")
+            tail = pace.get("outcome") or pace.get("description")
+            parts = []
+            if label:
+                body = str(label)
+                if isinstance(pct, (int, float)):
+                    body += f" ({pct:+.0f}%)"
+                parts.append(body)
+            if tail:
+                parts.append(str(tail))
+            if parts:
+                return "Pace: " + " · ".join(parts)
+        return ""
+
+    def _render_extra_usage(self, entry: dict) -> None:
+        used, limit, pct = self._extra_usage(entry)
+        title = Gtk.Label(label="Extra usage", xalign=0.0)
+        title.add_css_class("codexbar-section-title")
+        title.add_css_class("codexbar-extra-title")
+        title.set_margin_bottom(sx(5))
+        self.body.append(title)
+        self.body.append(self._meter(pct, ["codex-usage"]))
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row.add_css_class("codexbar-extra-row")
+        row.set_margin_bottom(sx(26))
+        left = Gtk.Label(
+            label=f"This month: {self._format_money(used)} / {self._format_money(limit)}",
+            xalign=0.0,
+            hexpand=True)
+        left.add_css_class("codexbar-section-detail-left")
+        row.append(left)
+        right = Gtk.Label(label=f"{int(round(pct))}% used", xalign=1.0)
+        right.add_css_class("codexbar-section-detail-right")
+        row.append(right)
+        self.body.append(row)
+
+    def _render_cost(self, entry: dict) -> None:
+        today_cost, today_tokens, last30_cost, last30_tokens = self._cost_usage(entry)
+
+        heading = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        title = Gtk.Label(label="Cost", xalign=0.0, hexpand=True)
+        title.add_css_class("codexbar-section-title")
+        heading.append(title)
+        arrow = Gtk.Label(label="›", xalign=1.0)
+        arrow.add_css_class("codexbar-chevron")
+        heading.append(arrow)
+        self.body.append(heading)
+
+        today = Gtk.Label(
+            label=f"Today: {self._format_money(today_cost)} · {self._format_tokens(today_tokens)}",
+            xalign=0.0)
+        today.add_css_class("codexbar-section-detail-left")
+        today.add_css_class("codexbar-cost-row")
+        self.body.append(today)
+
+        last = Gtk.Label(
+            label=f"Last 30 days: {self._format_money(last30_cost)} · {self._format_tokens(last30_tokens)}",
+            xalign=0.0)
+        last.add_css_class("codexbar-section-detail-left")
+        last.add_css_class("codexbar-cost-last-row")
+        self.body.append(last)
+
+    def _render_actions(self) -> None:
+        self.body.append(self._menu_row(
+            "Add Account...",
+            self._on_add_account,
+            glyph=MENU_GLYPHS["add-account"]))
+        self.body.append(self._menu_row(
+            "Usage Dashboard",
+            self._on_usage_dashboard,
+            glyph=MENU_GLYPHS["dashboard"]))
+        self.body.append(self._menu_row(
+            "Status Page",
+            self._on_status_page,
+            glyph=MENU_GLYPHS["status"]))
+        self.body.append(self._divider("codexbar-before-footer-divider"))
+        self.body.append(self._menu_row("Settings...", self._on_settings_call))
+        self.body.append(self._menu_row("About CodexBar", self._on_about_call))
+        self.body.append(self._menu_row("Quit", self.quit))
 
     def _clear(self, container: Gtk.Box):
         child = container.get_first_child()

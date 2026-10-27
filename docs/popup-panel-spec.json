@@ -1,0 +1,67 @@
+{
+  "name": "CodexBar popup panel parity spec",
+  "version": 1,
+  "scope": "Panel crop only. Excludes macOS menu bar chrome, desktop wallpaper, and any surrounding background.",
+  "reference": {
+    "image": "assets/design/upstream-codexbar-reference.png",
+    "panel_crop": {"x": 44, "y": 63, "width": 620, "height": 1309}
+  },
+  "verification": {
+    "divider_search_y_px": 6
+  },
+  "render": {
+    "fixture": "tests/fixtures/reference-last.json",
+    "environment": {
+      "CODEXBAR_POPUP_SCALE": "1",
+      "CODEXBAR_POPUP_EDGE": "top",
+      "CODEXBAR_POPUP_TOP_MARGIN": "63",
+      "CODEXBAR_POPUP_RIGHT_MARGIN": "52",
+      "CODEXBAR_DISABLE_REFRESH": "1",
+      "CODEXBAR_INITIAL_PROVIDER": "claude"
+    }
+  },
+  "sources": {
+    "provider_icons": "Upstream CodexBar Sources/CodexBar/Resources/ProviderIcon-*.svg",
+    "provider_icon_renderer": "Upstream CodexBar ProviderBrandIcon.swift uses provider descriptors, 16 pt template SVGs.",
+    "switcher": "Upstream CodexBar ProviderSwitcherView uses controlAccentColor selection, secondaryLabelColor inactive text, 16 pt template icons, and 2 pt quota indicators.",
+    "card_layout": "Upstream CodexBar UsageMenuCardLayout defines 20 pt horizontal padding, 6 pt progress bars, 12 pt section spacing at AppKit point scale."
+  },
+  "components": [
+    {"id": "panel_shell", "kind": "panel", "bbox": [0, 0, 620, 1309], "tolerance_mae": 30},
+    {"id": "tabbar", "kind": "container", "bbox": [0, 0, 620, 92], "tolerance_mae": 28},
+    {"id": "tab_codex", "kind": "provider_tab", "bbox": [30, 8, 79, 70], "tolerance_mae": 42},
+    {"id": "tab_claude_active", "kind": "provider_tab_active", "bbox": [117, 8, 98, 70], "tolerance_mae": 36},
+    {"id": "tab_cursor", "kind": "provider_tab", "bbox": [229, 8, 80, 70], "tolerance_mae": 42},
+    {"id": "tab_droid", "kind": "provider_tab", "bbox": [328, 8, 71, 70], "tolerance_mae": 42},
+    {"id": "tab_gemini", "kind": "provider_tab", "bbox": [428, 8, 80, 70], "tolerance_mae": 42},
+    {"id": "tab_copilot", "kind": "provider_tab", "bbox": [525, 8, 70, 70], "tolerance_mae": 42},
+    {"id": "tab_divider", "kind": "divider", "bbox": [31, 91, 557, 2], "tolerance_mae": 18},
+
+    {"id": "provider_header", "kind": "header", "bbox": [32, 116, 556, 58], "tolerance_mae": 44},
+    {"id": "header_divider", "kind": "divider", "bbox": [32, 189, 556, 2], "tolerance_mae": 18},
+
+    {"id": "session_section", "kind": "usage_section", "bbox": [32, 231, 556, 88], "tolerance_mae": 45},
+    {"id": "session_bar", "kind": "usage_bar", "bbox": [32, 270, 556, 12], "tolerance_mae": 22},
+    {"id": "weekly_section", "kind": "usage_section", "bbox": [32, 351, 556, 121], "tolerance_mae": 45},
+    {"id": "weekly_bar", "kind": "usage_bar", "bbox": [32, 388, 556, 13], "tolerance_mae": 22},
+    {"id": "sonnet_section", "kind": "usage_section", "bbox": [32, 505, 556, 88], "tolerance_mae": 45},
+    {"id": "sonnet_bar", "kind": "usage_bar", "bbox": [32, 544, 556, 12], "tolerance_mae": 22},
+    {"id": "usage_divider", "kind": "divider", "bbox": [32, 631, 556, 2], "tolerance_mae": 18},
+
+    {"id": "extra_usage", "kind": "usage_section", "bbox": [32, 675, 556, 82], "tolerance_mae": 45},
+    {"id": "extra_usage_bar", "kind": "usage_bar", "bbox": [32, 711, 556, 12], "tolerance_mae": 22},
+    {"id": "extra_divider", "kind": "divider", "bbox": [32, 797, 556, 2], "tolerance_mae": 18},
+
+    {"id": "cost_section", "kind": "cost", "bbox": [32, 838, 556, 101], "tolerance_mae": 48},
+    {"id": "cost_divider", "kind": "divider", "bbox": [32, 978, 556, 2], "tolerance_mae": 18},
+
+    {"id": "action_add_account", "kind": "action_row", "bbox": [32, 1000, 556, 51], "tolerance_mae": 52},
+    {"id": "action_usage_dashboard", "kind": "action_row", "bbox": [32, 1050, 556, 51], "tolerance_mae": 52},
+    {"id": "action_status_page", "kind": "action_row", "bbox": [32, 1100, 556, 51], "tolerance_mae": 52},
+    {"id": "actions_divider", "kind": "divider", "bbox": [32, 1144, 556, 2], "tolerance_mae": 18},
+
+    {"id": "footer_settings", "kind": "plain_row", "bbox": [32, 1166, 556, 48], "tolerance_mae": 52},
+    {"id": "footer_about", "kind": "plain_row", "bbox": [32, 1215, 556, 48], "tolerance_mae": 52},
+    {"id": "footer_quit", "kind": "plain_row", "bbox": [32, 1264, 556, 44], "tolerance_mae": 52}
+  ]
+}

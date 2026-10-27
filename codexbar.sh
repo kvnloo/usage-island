@@ -7,15 +7,32 @@
 # until the next refresh recovers it.
 #
 # Linux-only providers — cookies/web providers are macOS-only. The list is
-# read from ~/.codexbar/config.json (use the popover's Settings view to
-# manage it); falls back to codex+claude+gemini if the file is missing.
+# read from CodexBar's config (use the popover's Settings view to manage it);
+# falls back to codex+claude+gemini if the file is missing.
 
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-CODEXBAR="${CODEXBAR_BIN:-${HOME}/.local/bin/codexbar}"
-CONFIG_PATH="${HOME}/.codexbar/config.json"
+if [[ -n "${CODEXBAR_BIN:-}" ]]; then
+    CODEXBAR="$CODEXBAR_BIN"
+elif command -v codexbar >/dev/null 2>&1; then
+    CODEXBAR="$(command -v codexbar)"
+else
+    CODEXBAR="${HOME}/.local/bin/codexbar"
+fi
+CONFIG_PATH="${CODEXBAR_CONFIG_PATH:-}"
+if [[ -z "$CONFIG_PATH" ]]; then
+    XDG_CODEXBAR_CONFIG="${XDG_CONFIG_HOME:-${HOME}/.config}/codexbar/config.json"
+    LEGACY_CODEXBAR_CONFIG="${HOME}/.codexbar/config.json"
+    if [[ -f "$XDG_CODEXBAR_CONFIG" ]]; then
+        CONFIG_PATH="$XDG_CODEXBAR_CONFIG"
+    elif [[ -f "$LEGACY_CODEXBAR_CONFIG" ]]; then
+        CONFIG_PATH="$LEGACY_CODEXBAR_CONFIG"
+    else
+        CONFIG_PATH="$XDG_CODEXBAR_CONFIG"
+    fi
+fi
 STATE_PATH="${XDG_CONFIG_HOME:-${HOME}/.config}/codexbar-waybar/state.json"
 CACHE_DIR="${XDG_CACHE_HOME:-${HOME}/.cache}/codexbar-waybar"
 mkdir -p "$CACHE_DIR"
@@ -153,15 +170,15 @@ fetch_one() {
             CUSTOM_CA_BUNDLE="${ANTIGRAVITY_CUSTOM_CA_BUNDLE:-}" \
             LD_PRELOAD="${ANTIGRAVITY_LD_PRELOAD:-}" \
             ANTIGRAVITY_OAUTH_CREDENTIALS_JSON="$(cat "$ANTIGRAVITY_CREDS")" \
-                "$CODEXBAR" "${args[@]}" 2>/dev/null
+                run_codexbar "${args[@]}"
         else
             CUSTOM_CA_BUNDLE="${ANTIGRAVITY_CUSTOM_CA_BUNDLE:-}" \
             LD_PRELOAD="${ANTIGRAVITY_LD_PRELOAD:-}" \
-                "$CODEXBAR" "${args[@]}" 2>/dev/null
+                run_codexbar "${args[@]}"
         fi
         return
     fi
-    "$CODEXBAR" "${args[@]}" 2>/dev/null
+    run_codexbar "${args[@]}"
 }
 
 fetch_provider() {
@@ -189,10 +206,19 @@ fetch_provider() {
 
 # Sequential fetch with a small stagger between providers (avoids 429s).
 STAGGER_SECS="${CODEXBAR_STAGGER:-0.5}"
+PROVIDER_TIMEOUT="${CODEXBAR_PROVIDER_TIMEOUT:-20s}"
 LAST_GOOD="$CACHE_DIR/last.json"
 
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
+
+run_codexbar() {
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$PROVIDER_TIMEOUT" "$CODEXBAR" "$@" 2>/dev/null
+    else
+        "$CODEXBAR" "$@" 2>/dev/null
+    fi
+}
 
 i=0
 for p in "${PROVIDERS[@]}"; do

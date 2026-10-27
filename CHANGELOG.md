@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- The wrapper and popup now resolve CodexBar's current XDG config path
+  (`~/.config/codexbar/config.json`) before falling back to the legacy
+  `~/.codexbar/config.json`. Set `CODEXBAR_CONFIG_PATH` to override it.
+- The popup now defaults to a compact scaled bottom-right placement suitable for a
+  bottom Waybar, with `CODEXBAR_POPUP_SCALE`, `CODEXBAR_POPUP_EDGE`, and
+  margin env vars for monitor-specific tuning.
+- Visual parity work is now anchored to a panel-only component spec that
+  excludes the macOS menu bar and background from comparisons.
+- The design docs now include a reference fixture and component verifier for
+  the popup panel, including local row search for one-pixel divider checks.
+- The popup switcher now keeps the upstream reference provider order visible by
+  default and uses fixed Nerd Font glyphs for action-row symbols instead of
+  host GTK theme icons.
+
+### Fixed
+- The popup no longer relies on preview/mock cache data during normal use; it
+  paints from `~/.cache/codexbar-waybar/last.json` produced by `codexbar.sh`,
+  which in turn fetches real provider usage through the CodexBar CLI.
+- The wrapper and popup now find `codexbar` from `PATH` by default instead of
+  assuming the binary is installed at `~/.local/bin/codexbar`.
+- Provider calls are now bounded by `CODEXBAR_PROVIDER_TIMEOUT` (default
+  `20s`) so one slow fallback source cannot wedge Waybar refreshes.
+
 ## [0.3.1] — 2026-06-03
 
 ### Changed

@@ -1,0 +1,63 @@
+[
+  {
+    "provider": "codex",
+    "source": "fixture",
+    "usage": {
+      "updatedAt": "2026-07-02T10:00:00Z",
+      "loginMethod": "pro",
+      "primary": {"usedPercent": 1, "resetDescription": "Resets in 4h"},
+      "secondary": {"usedPercent": 0, "resetDescription": "Resets in 4d"}
+    }
+  },
+  {
+    "provider": "claude",
+    "source": "fixture",
+    "usage": {
+      "updatedAt": "2026-07-02T10:00:00Z",
+      "primary": {"usedPercent": 2, "resetDescription": "Resets in 3h 53m"},
+      "secondary": {
+        "usedPercent": 3,
+        "resetDescription": "Resets in 3d 20h",
+        "paceDescription": "Pace: Behind (-42%) \u00b7 Lasts to reset"
+      },
+      "tertiary": {"usedPercent": 0}
+    },
+    "cost": {
+      "today": {"cost": 0.04, "tokens": "15K tokens"},
+      "last30Days": {"cost": 254.24, "tokens": "218M tokens"}
+    }
+  },
+  {
+    "provider": "cursor",
+    "source": "fixture",
+    "usage": {
+      "updatedAt": "2026-07-02T10:00:00Z",
+      "primary": {"usedPercent": 1, "resetDescription": "Resets in 2h"},
+      "secondary": {"usedPercent": 0, "resetDescription": "Resets in 3d"}
+    }
+  },
+  {
+    "provider": "factory",
+    "source": "fixture",
+    "usage": {
+      "updatedAt": "2026-07-02T10:00:00Z",
+      "primary": {"usedPercent": 0, "resetDescription": "Resets in 1d"}
+    }
+  },
+  {
+    "provider": "gemini",
+    "source": "fixture",
+    "usage": {
+      "updatedAt": "2026-07-02T10:00:00Z",
+      "primary": {"usedPercent": 0, "resetDescription": "Resets in 5h"}
+    }
+  },
+  {
+    "provider": "copilot",
+    "source": "fixture",
+    "usage": {
+      "updatedAt": "2026-07-02T10:00:00Z",
+      "primary": {"usedPercent": 0, "resetDescription": "Resets in 6h"}
+    }
+  }
+]

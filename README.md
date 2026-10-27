@@ -17,7 +17,8 @@ This repo bridges that gap with two pieces:
 - A **GTK4 popover** modelled on the macOS menu — provider tab strip with
   real brand logos, flat sections, thin progress bars, reset countdowns,
   credit balances, and an inline Settings view for toggling providers and
-  picking which one is pinned to the bar.
+  picking which one is pinned to the bar. The visual target is documented in
+  [`docs/design.md`](docs/design.md).
 
 <p align="center">
   <img src="assets/popup.png" alt="codexbar-waybar popover with provider logos" width="370" />
@@ -99,9 +100,11 @@ codexbar --help
 Make sure you've already signed in via the providers' own CLIs (`codex login`,
 `claude /login`, `gcloud auth application-default login` for Gemini,
 `agy login` for Antigravity, etc.).
-The CLI bootstraps a `~/.codexbar/config.json` with Codex enabled by default
-the first time it runs; use the popover's Settings view to toggle Claude,
-Gemini, or anything else on without hand-editing JSON.
+The CLI bootstraps `~/.config/codexbar/config.json` with Codex enabled by
+default the first time it runs; use the popover's Settings view to toggle
+Claude, Gemini, or anything else on without hand-editing JSON. Older CodexBar
+installs may still use `~/.codexbar/config.json`; the wrapper and popup keep a
+legacy fallback for that path.
 
 ## Install codexbar-waybar
 
@@ -141,7 +144,7 @@ Reload Waybar (`Ctrl+Alt+W` on HyDE, or `pkill waybar; waybar &`).
   reverts to `Highest`. Selection writes
   `~/.config/codexbar-waybar/state.json` and signals waybar immediately.
 - **Settings → Providers** toggles which providers feed the bar and popover.
-  *Save* writes `~/.codexbar/config.json` and triggers a refresh.
+  *Save* writes `~/.config/codexbar/config.json` and triggers a refresh.
 
 <p align="center">
   <img src="assets/settings.png" alt="codexbar-waybar inline settings view" width="395" />
@@ -156,30 +159,39 @@ definition or your shell profile.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `CODEXBAR_BIN` | `~/.local/bin/codexbar` | Path to the CLI binary. |
+| `CODEXBAR_BIN` | `codexbar` on `PATH` | Path to the CLI binary. Falls back to `~/.local/bin/codexbar` if it is not on `PATH`. |
 | `CODEXBAR_STAGGER` | `0.5` | Seconds between provider fetches (raise it if Claude OAuth keeps 429-ing). |
-| `CODEXBAR_PROVIDERS` | from `config.json` | Space-separated provider IDs to query, bypassing `~/.codexbar/config.json`. Set per-Waybar instance if you want different sets per monitor. |
+| `CODEXBAR_PROVIDER_TIMEOUT` | `20s` | Maximum time to wait for one provider CLI call before preserving the last good snapshot and continuing. |
+| `CODEXBAR_CONFIG_PATH` | auto-detected | Override the CodexBar config path. Defaults to `~/.config/codexbar/config.json`, with a legacy fallback to `~/.codexbar/config.json`. |
+| `CODEXBAR_PROVIDERS` | from `config.json` | Space-separated provider IDs to query, bypassing the CodexBar config file. Set per-Waybar instance if you want different sets per monitor. |
 | `CODEXBAR_BAR_PROVIDER` | from `state.json` | Pin a specific provider's session/weekly to the bar regardless of state. Set to a provider ID, or unset for `Highest`. |
 | `CODEXBAR_ANTIGRAVITY_CREDS` | `~/.gemini/oauth_creds.json` | Path to the Antigravity Google OAuth creds (written by `agy login`) the wrapper feeds to the CLI. |
 | `CODEXBAR_RESET_TIME_FORMAT` | from `state.json` | Reset-time rendering mode: `provider` (use the provider's `resetDescription` as-is, default), `local` (reformat `resetsAt` in the system timezone with a TZ suffix), or `utc` (same tiering, in UTC). The popover's Settings view exposes the same toggle. |
+| `CODEXBAR_POPUP_SCALE` | `0.50` | Scales the CodexBar-style popup for minimal Waybar setups while keeping the upstream proportions. Use `1` for raw panel-reference verification. |
+| `CODEXBAR_POPUP_EDGE` | `bottom` | Vertical edge to anchor to: `bottom` for a bottom Waybar, `top` for a top bar/menu-bar layout. |
+| `CODEXBAR_POPUP_RIGHT_MARGIN` | scaled `52` | Right-side popup offset in pixels. |
+| `CODEXBAR_POPUP_TOP_MARGIN` | scaled `63` | Top offset used when `CODEXBAR_POPUP_EDGE=top`. |
+| `CODEXBAR_POPUP_BOTTOM_MARGIN` | `38` | Bottom offset used when `CODEXBAR_POPUP_EDGE=bottom`; default leaves an 8 px gap above a 30 px Waybar. |
+| `CODEXBAR_POPUP_REFERENCE_TABS` | `1` | Show the upstream reference provider switcher order (Codex, Claude, Cursor, Droid, Gemini, Copilot) even when some providers have no cached data. Set to `0` to show only cached providers. |
 | `CODEXBAR_LAYER_SHELL_LIB` | auto-detected | Override path to `libgtk4-layer-shell.so` if your distro stashes it somewhere unusual. |
 | `XDG_CACHE_HOME` | `~/.cache` | Where `last.json` snapshots live. |
 | `XDG_DATA_HOME` | `~/.local/share` | Where provider icons live (under `codexbar-waybar/icons/`). |
 
 To change which providers appear, open the popover and click **Settings…** —
 the inline view lets you toggle providers and Save back to
-`~/.codexbar/config.json`. Codex and Claude need `--source oauth` on Linux;
-the wrapper sets that automatically via `SOURCE_OVERRIDES` at the top of
-`codexbar.sh` and falls back to `--source cli` on errors where the CLI source
-is available (currently: Claude).
+`~/.config/codexbar/config.json`. Codex and Claude need `--source oauth` on
+Linux; the wrapper sets that automatically via `SOURCE_OVERRIDES` at the top
+of `codexbar.sh` and falls back to `--source cli` on errors where the CLI
+source is available (currently: Claude).
 
 ## How it works
 
 1. Waybar runs `codexbar.sh` every 30 s (or whenever it receives
    `SIGRTMIN+8`).
-2. The script reads `~/.codexbar/config.json` to learn which providers are
-   enabled, then invokes `codexbar usage --provider <p> --format json` once
-   per enabled provider, sequentially, with a small stagger.
+2. The script reads CodexBar's config (`~/.config/codexbar/config.json`, or
+   `CODEXBAR_CONFIG_PATH` when set) to learn which providers are enabled, then
+   invokes `codexbar usage --provider <p> --format json` once per enabled
+   provider, sequentially, with a small stagger.
 3. Each response is the same JSON payload the macOS menu-bar app consumes:
    primary / secondary / tertiary usage windows, reset timestamps, credit
    balances, error info. Claude OAuth 429s trigger a transparent retry via
